@@ -12,6 +12,8 @@ func main() {
 		switch r.Method {
 		case http.MethodGet:
 			handler.GetJobs(w, r)
+		case http.MethodPost:
+			handler.CreateJob(w, r)
 		default:
 			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		}
