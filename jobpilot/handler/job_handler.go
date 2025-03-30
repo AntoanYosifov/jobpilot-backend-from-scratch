@@ -20,9 +20,9 @@ func JobsHandler(w http.ResponseWriter, r *http.Request) {
 	enableCORS(w)
 	switch r.Method {
 	case http.MethodGet:
-		GetJobs(w, r)
+		getJobs(w, r)
 	case http.MethodPost:
-		CreateJob(w, r)
+		createJob(w, r)
 	default:
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 	}
@@ -39,10 +39,17 @@ func JobByIdHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	updateJobFullReplace(w, r, id)
+	switch r.Method {
+	case http.MethodPut:
+		updateJobFullReplace(w, r, id)
+	case http.MethodPatch:
+		updatedJobPartial(w, r, id)
+	default:
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+	}
 }
 
-func GetJobs(w http.ResponseWriter, r *http.Request) {
+func getJobs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	err := json.NewEncoder(w).Encode(jobs)
 	if err != nil {
@@ -50,7 +57,7 @@ func GetJobs(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func CreateJob(w http.ResponseWriter, r *http.Request) {
+func createJob(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	var newJobs []model.Job
@@ -108,6 +115,43 @@ func updateJobFullReplace(w http.ResponseWriter, r *http.Request, id int) {
 	}
 
 	http.Error(w, "Job not found", http.StatusNotFound)
+}
+
+func updatedJobPartial(w http.ResponseWriter, r *http.Request, id int) {
+	var updates model.Job
+	err := json.NewDecoder(r.Body).Decode(&updates)
+
+	if err != nil {
+		http.Error(w, "Invalid JSON input", http.StatusBadRequest)
+		return
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	for i := range jobs {
+		if jobs[i].ID == id {
+
+			if updates.Title != "" {
+				jobs[i].Title = updates.Title
+			}
+			if updates.Company != "" {
+				jobs[i].Company = updates.Company
+			}
+			if updates.Status != "" {
+				jobs[i].Status = updates.Status
+			}
+			if updates.Date != "" {
+				jobs[i].Date = updates.Date
+			}
+
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(jobs[i])
+			return
+		}
+	}
+
+	http.Error(w, "Job not Found", http.StatusNotFound)
 }
 
 func enableCORS(w http.ResponseWriter) {
