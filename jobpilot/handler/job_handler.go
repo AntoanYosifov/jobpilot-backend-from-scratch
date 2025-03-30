@@ -2,18 +2,14 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
+	"gorm.io/gorm"
+	"jobpilot/db"
 	"jobpilot/model"
 	"log"
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
-)
-
-var (
-	jobs   = []model.Job{}
-	nextID = 1
-	mu     sync.Mutex
 )
 
 func JobsHandler(w http.ResponseWriter, r *http.Request) {
@@ -22,7 +18,7 @@ func JobsHandler(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		getJobs(w, r)
 	case http.MethodPost:
-		createJob(w, r)
+		createJobs(w, r)
 	default:
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 	}
@@ -51,13 +47,23 @@ func JobByIdHandler(w http.ResponseWriter, r *http.Request) {
 
 func getJobs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+
+	var jobs []model.Job
+	result := db.DB.Find(&jobs)
+
+	if result.Error != nil {
+		log.Printf("[Error] GetJobs DB failure: %v", result.Error)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
 	err := json.NewEncoder(w).Encode(jobs)
 	if err != nil {
-		return
+		log.Printf("Failed to encode response: %v", err)
 	}
 }
 
-func createJob(w http.ResponseWriter, r *http.Request) {
+func createJobs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	var newJobs []model.Job
@@ -67,18 +73,19 @@ func createJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	mu.Lock()
-	for i := range newJobs {
-		if newJobs[i].Title == "" || newJobs[i].Company == "" {
-			mu.Unlock()
+	for _, job := range newJobs {
+		if job.Title == "" || job.Company == "" {
 			http.Error(w, "Title and Company are required for all jobs", http.StatusBadRequest)
 			return
 		}
-		newJobs[i].ID = nextID
-		nextID++
-		jobs = append(jobs, newJobs[i])
 	}
-	mu.Unlock()
+
+	result := db.DB.Create(&newJobs)
+	if result.Error != nil {
+		log.Printf("[ERROR] Failed to insert jobs: %v", result.Error)
+		http.Error(w, "Failed to save jobs", http.StatusInternalServerError)
+		return
+	}
 
 	w.WriteHeader(http.StatusCreated)
 	err = json.NewEncoder(w).Encode(newJobs)
@@ -100,21 +107,38 @@ func updateJobFullReplace(w http.ResponseWriter, r *http.Request, id int) {
 		return
 	}
 
-	mu.Lock()
-	defer mu.Unlock()
+	var existing model.Job
+	result := db.DB.First(&existing, id)
+	if result.Error != nil {
 
-	for i := range jobs {
-		if jobs[i].ID == id {
-			updated.ID = id
-			jobs[i] = updated
-
-			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(jobs[i])
+		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+			http.Error(w, "Job not found", http.StatusNotFound)
 			return
 		}
+
+		log.Printf("[ERROR] DB failed to find job ID %d: %v", id, result.Error)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
 	}
 
-	http.Error(w, "Job not found", http.StatusNotFound)
+	existing.Title = updated.Title
+	existing.Company = updated.Company
+	existing.Status = updated.Status
+	existing.Date = updated.Date
+
+	saveResult := db.DB.Save(&existing)
+	if saveResult.Error != nil {
+		log.Printf("[ERROR] Failed to update job ID %d: %v", id, saveResult.Error)
+		http.Error(w, "Failed to update job", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	err = json.NewEncoder(w).Encode(existing)
+	if err != nil {
+		log.Printf("Failed to encode response: %v", err)
+	}
+
 }
 
 func updatedJobPartial(w http.ResponseWriter, r *http.Request, id int) {
@@ -126,32 +150,43 @@ func updatedJobPartial(w http.ResponseWriter, r *http.Request, id int) {
 		return
 	}
 
-	mu.Lock()
-	defer mu.Unlock()
-
-	for i := range jobs {
-		if jobs[i].ID == id {
-
-			if updates.Title != "" {
-				jobs[i].Title = updates.Title
-			}
-			if updates.Company != "" {
-				jobs[i].Company = updates.Company
-			}
-			if updates.Status != "" {
-				jobs[i].Status = updates.Status
-			}
-			if updates.Date != "" {
-				jobs[i].Date = updates.Date
-			}
-
-			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(jobs[i])
+	var existing model.Job
+	result := db.DB.First(&existing, id)
+	if result.Error != nil {
+		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+			http.Error(w, "Job not found", http.StatusNotFound)
 			return
 		}
+		log.Printf("[ERROR] Failed to fetch job ID %d: %v", id, result.Error)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
 	}
 
-	http.Error(w, "Job not Found", http.StatusNotFound)
+	if updates.Title != "" {
+		existing.Title = updates.Title
+	}
+	if updates.Company != "" {
+		existing.Company = updates.Company
+	}
+	if updates.Status != "" {
+		existing.Status = updates.Status
+	}
+	if updates.Date != "" {
+		existing.Date = updates.Date
+	}
+
+	saveResult := db.DB.Save(&existing)
+	if saveResult.Error != nil {
+		log.Printf("[ERROR] Failed to update job ID %d: %v", id, saveResult.Error)
+		http.Error(w, "Failed to update job", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	err = json.NewEncoder(w).Encode(existing)
+	if err != nil {
+		log.Printf("Failed to encode response: %v", err)
+	}
 }
 
 func enableCORS(w http.ResponseWriter) {
