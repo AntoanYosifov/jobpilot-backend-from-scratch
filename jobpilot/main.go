@@ -8,16 +8,8 @@ import (
 )
 
 func main() {
-	http.HandleFunc("/jobs", func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			handler.GetJobs(w, r)
-		case http.MethodPost:
-			handler.CreateJob(w, r)
-		default:
-			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-		}
-	})
+	http.HandleFunc("/jobs", handler.JobsHandler)
+	http.HandleFunc("/jobs/", handler.JobByIdHandler)
 	fmt.Println("🚀 JobPilot backend running on http://localhost:8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
